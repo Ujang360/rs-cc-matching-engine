@@ -42,21 +42,21 @@ fn bench_perfect_limit_match(match_count: u64) {
     let mut the_orderbooks = Orderbooks::default();
     let mut limit_bid_orders = Vec::new();
     let mut limit_ask_orders = Vec::new();
-    for _ in 0..match_count {
+    for i in 0..match_count {
         limit_bid_orders.push(OrderMessage {
             r#type: OrderType::Limit,
             side: OrderSide::Bid,
             volume: Some(20_000),
-            price: Some(100_000),
+            price: Some(100_000 - (i % 1000)),
             ..Default::default()
         });
     }
-    for _ in 0..match_count {
+    for i in 0..match_count {
         limit_ask_orders.push(OrderMessage {
             r#type: OrderType::Limit,
             side: OrderSide::Ask,
             volume: Some(20_000),
-            price: Some(90_000),
+            price: Some(90_000 + (i % 1000)),
             ..Default::default()
         });
     }
@@ -88,4 +88,5 @@ fn main() {
     bench_perfect_limit_match(500);
     bench_perfect_limit_match(5_000);
     bench_perfect_limit_match(50_000);
+    bench_perfect_limit_match(500_000);
 }

@@ -56,40 +56,48 @@ CC Matching Engine (Rust) - 1.0.0-beta.0
 [Benchmark: 5 Limit Match (10 Orders)]
 - Populating Orders...DONE
 - Matching...DONE
-- Took 15689 ns to complete
-- 637755 Orders per second
+- Took 12132 ns to complete
+- 824402 Orders per second
 - Orderbook Bids count 0 orders
 - Orderbook Asks count 0 orders
 
 [Benchmark: 50 Limit Match (100 Orders)]
 - Populating Orders...DONE
 - Matching...DONE
-- Took 62631 ns to complete
-- 1597444 Orders per second
+- Took 69862 ns to complete
+- 1432664 Orders per second
 - Orderbook Bids count 0 orders
 - Orderbook Asks count 0 orders
 
 [Benchmark: 500 Limit Match (1000 Orders)]
 - Populating Orders...DONE
 - Matching...DONE
-- Took 674344 ns to complete
-- 1483679 Orders per second
+- Took 700963 ns to complete
+- 1428571 Orders per second
 - Orderbook Bids count 0 orders
 - Orderbook Asks count 0 orders
 
 [Benchmark: 5000 Limit Match (10000 Orders)]
 - Populating Orders...DONE
 - Matching...DONE
-- Took 16533547 ns to complete
-- 604960 Orders per second
+- Took 6642319 ns to complete
+- 1506024 Orders per second
 - Orderbook Bids count 0 orders
 - Orderbook Asks count 0 orders
 
 [Benchmark: 50000 Limit Match (100000 Orders)]
 - Populating Orders...DONE
 - Matching...DONE
-- Took 1458901648 ns to complete
-- 68544 Orders per second
+- Took 73429476 ns to complete
+- 1362397 Orders per second
+- Orderbook Bids count 0 orders
+- Orderbook Asks count 0 orders
+
+[Benchmark: 500000 Limit Match (1000000 Orders)]
+- Populating Orders...DONE
+- Matching...DONE
+- Took 884735682 ns to complete
+- 1131221 Orders per second
 - Orderbook Bids count 0 orders
 - Orderbook Asks count 0 orders
 
