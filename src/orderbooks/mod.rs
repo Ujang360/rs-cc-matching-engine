@@ -13,7 +13,7 @@ pub type Index = usize;
 #[repr(align(8))]
 pub struct Orderbook {
     pub orders: BTreeMap<PriceLevel, Vec<OrderbookOrder>>,
-    pub orders_location: HashMap<Uuid, (PriceLevel, Index)>,
+    pub orders_location: HashMap<Uuid, PriceLevel>,
 }
 
 #[derive(Clone, Debug)]
@@ -35,9 +35,13 @@ impl Orderbook {
         }
 
         let mut retval = None;
-        let (_, (price_level, index)) = self.orders_location.remove_entry(order_id).unwrap();
+        let (_, price_level) = self.orders_location.remove_entry(order_id).unwrap();
 
         if let Some(price_level_orders) = self.orders.get_mut(&price_level) {
+            let index = price_level_orders
+                .iter()
+                .position(|order| order.id == *order_id)
+                .unwrap();
             retval = Some(price_level_orders.remove(index));
 
             if price_level_orders.is_empty() {
@@ -54,16 +58,14 @@ impl Orderbook {
         }
 
         let order_id = order.id;
-        let mut insertion_index = 0;
 
         if let Some(pricelevel_orders) = self.orders.get_mut(&price_level) {
-            insertion_index = pricelevel_orders.len();
             pricelevel_orders.push(order)
         } else {
             self.orders.insert(price_level, [order].to_vec());
         }
 
-        self.orders_location.insert(order_id, (price_level, insertion_index));
+        self.orders_location.insert(order_id, price_level);
     }
 }
 

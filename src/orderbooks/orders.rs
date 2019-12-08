@@ -1,3 +1,4 @@
+use chrono::Utc;
 use std::mem;
 use uuid::Uuid;
 
@@ -62,6 +63,22 @@ pub struct OrderMessage {
 pub struct OrderbookOrder {
     pub id: OrderId,                   // 16 bytes
     pub remaining_volume: OrderVolume, // 8 bytes
+}
+
+impl Default for OrderMessage {
+    fn default() -> OrderMessage {
+        OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::NoSide,
+            r#type: OrderType::Limit,
+            volume: None,
+            price: None,
+            max_quote: None,
+            events: Vec::new(),
+        }
+    }
 }
 
 impl PartialEq for OrderSide {
