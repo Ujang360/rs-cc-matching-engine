@@ -1,5 +1,5 @@
 [package]
-name = "rs-cc-matching-engine"
+name = "cc-matching-engine"
 version = "1.0.0-beta.0"
 authors = ["Aditya Kresna <aditya.kresna@outlook.co.id>"]
 edition = "2018"
