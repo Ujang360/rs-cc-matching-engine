@@ -4,20 +4,34 @@ mod orderbooks;
 
 pub use orderbooks::*;
 
+macro_rules! show_size {
+    ($t:ty) => {
+        println!(
+            "- {}:\n  * Size {} bytes\n  * Aligment {} bytes",
+            stringify!($t),
+            size_of::<$t>(),
+            align_of::<$t>()
+        );
+    };
+}
+
+fn print_info_headers() {
+    println!();
+    println!("CC Matching Engine (Rust) - 1.0.0-beta.0");
+    println!("========================================");
+    println!();
+}
+
+fn print_structure_info() {
+    println!("[Data Structure Alignment]");
+    show_size!(OrderEvent);
+    show_size!(OrderMessage);
+    show_size!(OrderbookOrder);
+    show_size!(Orderbook);
+    show_size!(Orderbooks);
+}
+
 fn main() {
-    println!("\n[OrderEvent]");
-    println!("Packed Size        : {}", size_of::<OrderEvent>());
-    println!("Alignment Size     : {}", align_of::<OrderEvent>());
-    println!("\n[OrderMessage]");
-    println!("Packed Size        : {}", size_of::<OrderMessage>());
-    println!("Alignment Size     : {}", align_of::<OrderMessage>());
-    println!("\n[OrderbookOrder]");
-    println!("Packed Size        : {}", size_of::<OrderbookOrder>());
-    println!("Alignment Size     : {}", align_of::<OrderbookOrder>());
-    println!("\n[Orderbook]");
-    println!("Packed Size        : {}", size_of::<Orderbook>());
-    println!("Alignment Size     : {}", align_of::<Orderbook>());
-    println!("\n[Orderbooks]");
-    println!("Packed Size        : {}", size_of::<Orderbooks>());
-    println!("Alignment Size     : {}", align_of::<Orderbooks>());
+    print_info_headers();
+    print_structure_info();
 }
