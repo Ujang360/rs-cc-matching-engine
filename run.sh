@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 
-cargo build --release && \
+clear && \
+    RUST_BACKTRACE=1 cargo test && \
+    cargo build --release && \
     cp target/release/rs-cc-matching-engine cc-matching-engine.out && \
     strip cc-matching-engine.out && \
     clear && \

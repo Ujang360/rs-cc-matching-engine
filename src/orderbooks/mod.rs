@@ -67,6 +67,15 @@ impl Orderbook {
     }
 }
 
+impl Default for Orderbook {
+    fn default() -> Orderbook {
+        Orderbook {
+            orders: BTreeMap::default(),
+            orders_location: HashMap::default(),
+        }
+    }
+}
+
 impl Orderbooks {
     pub fn count(&self) -> (usize, usize, usize) {
         let bids_count = self.bids.count();
@@ -85,6 +94,7 @@ impl Orderbooks {
         match orderbook_side {
             OrderSide::Bid => self.bids.remove(order_id),
             OrderSide::Ask => self.asks.remove(order_id),
+            OrderSide::NoSide => panic!("Attempt to remove CancelOrder: {}", order_id),
         }
     }
 
@@ -102,6 +112,7 @@ impl Orderbooks {
         let orderbook = match order_message.side {
             OrderSide::Bid => &mut self.bids,
             OrderSide::Ask => &mut self.asks,
+            OrderSide::NoSide => panic!("Attempt to insert CancelOrder: {}", order_id),
         };
         let new_orderbook_order = OrderbookOrder {
             id: order_id,
@@ -124,7 +135,6 @@ impl Orderbooks {
         let mut order_events = HashMap::new();
         let current_order_events_ref = &mut current_order_events;
         let order_events_ref = &mut order_events;
-        let mut order_remaining_volume = current_order_volume.unwrap();
         let mut order_traded_volume = 0;
         let mut pending_order_removal_id = Vec::new();
 
@@ -150,6 +160,7 @@ impl Orderbooks {
                 order_events_ref.insert(removed_order.id, [original_order_event].to_vec());
             }
             OrderType::Market => {
+                let mut order_remaining_volume = current_order_volume.unwrap();
                 match current_order_side {
                     OrderSide::Ask => {
                         if !self.bids.orders_location.is_empty() {
@@ -251,18 +262,25 @@ impl Orderbooks {
                                 let price_level = *price_level_ref;
                                 let traded_price = Some(price_level);
                                 let pricelevel_ask_orders_iter = next_ask_orders_ref.iter_mut();
+                                let pricelevel_max_quote = order_remaining_volume * price_level;
+                                let mut pricelevel_trade_volume = 0;
 
-                                if order_remaining_quote < price_level {
+                                let mut remaining_pricelevel_volume = if pricelevel_max_quote > order_remaining_quote {
+                                    order_remaining_quote / price_level
+                                } else {
+                                    order_remaining_volume
+                                };
+
+                                if remaining_pricelevel_volume == 0 {
                                     break;
                                 }
-
-                                let mut remaining_pricelevel_volume = order_remaining_quote / price_level;
 
                                 for next_ask_order_ref in pricelevel_ask_orders_iter {
                                     let ask_order_id = next_ask_order_ref.id;
 
                                     if next_ask_order_ref.remaining_volume >= remaining_pricelevel_volume {
                                         order_traded_volume += remaining_pricelevel_volume;
+                                        pricelevel_trade_volume += remaining_pricelevel_volume;
                                         next_ask_order_ref.remaining_volume -= remaining_pricelevel_volume;
                                         order_remaining_volume -= remaining_pricelevel_volume;
                                         current_order_events_ref.push(OrderEvent {
@@ -299,6 +317,7 @@ impl Orderbooks {
                                         next_ask_order_ref.remaining_volume = 0;
                                         order_remaining_volume -= ask_order_traded_volume;
                                         order_traded_volume += ask_order_traded_volume;
+                                        pricelevel_trade_volume += ask_order_traded_volume;
                                         remaining_pricelevel_volume -= ask_order_traded_volume;
                                         current_order_events_ref.push(OrderEvent {
                                             timestamp: Utc::now().timestamp_nanos(),
@@ -331,7 +350,7 @@ impl Orderbooks {
                                     }
                                 }
 
-                                order_remaining_quote -= order_traded_volume * price_level;
+                                order_remaining_quote -= pricelevel_trade_volume * price_level;
                                 if order_remaining_volume == 0 {
                                     break;
                                 }
@@ -341,6 +360,9 @@ impl Orderbooks {
                                 self.asks.remove(&pending_removal_ask_id);
                             }
                         }
+                    }
+                    OrderSide::NoSide => {
+                        panic!("Attempt to executed CancelOrder as Market Order: {}", current_order_id)
                     }
                 }
 
@@ -364,17 +386,12 @@ impl Orderbooks {
             }
             OrderType::Limit => {
                 let order_price = current_order_price.unwrap();
+                let mut order_remaining_volume = current_order_volume.unwrap();
 
                 match current_order_side {
                     OrderSide::Ask => {
                         if self.bids.orders_location.is_empty() {
-                            self.asks.insert(
-                                order_price,
-                                OrderbookOrder {
-                                    id: current_order_id,
-                                    remaining_volume: order_remaining_volume,
-                                },
-                            );
+                            self.insert(&order_message, order_remaining_volume);
                         } else {
                             let bid_orderbook_iter = self.bids.orders.iter_mut().rev();
 
@@ -466,13 +483,7 @@ impl Orderbooks {
                             }
 
                             if order_remaining_volume > 0 {
-                                self.asks.insert(
-                                    order_price,
-                                    OrderbookOrder {
-                                        id: current_order_id,
-                                        remaining_volume: order_remaining_volume,
-                                    },
-                                );
+                                self.insert(&order_message, order_remaining_volume);
                             }
 
                             while let Some(pending_removal_bid_id) = pending_order_removal_id.pop() {
@@ -482,13 +493,7 @@ impl Orderbooks {
                     }
                     OrderSide::Bid => {
                         if self.asks.orders_location.is_empty() {
-                            self.bids.insert(
-                                order_price,
-                                OrderbookOrder {
-                                    id: current_order_id,
-                                    remaining_volume: order_remaining_volume,
-                                },
-                            );
+                            self.insert(&order_message, order_remaining_volume);
                         } else {
                             let ask_orderbook_iter = self.asks.orders.iter_mut();
 
@@ -580,13 +585,7 @@ impl Orderbooks {
                             }
 
                             if order_remaining_volume > 0 {
-                                self.bids.insert(
-                                    order_price,
-                                    OrderbookOrder {
-                                        id: current_order_id,
-                                        remaining_volume: order_remaining_volume,
-                                    },
-                                );
+                                self.insert(&order_message, order_remaining_volume);
                             }
 
                             while let Some(pending_removal_ask_id) = pending_order_removal_id.pop() {
@@ -594,6 +593,7 @@ impl Orderbooks {
                             }
                         }
                     }
+                    OrderSide::NoSide => panic!("Attempt to executed CancelOrder as Limit Order: {}", current_order_id),
                 }
 
                 if order_traded_volume == 0 {
@@ -629,5 +629,758 @@ impl Orderbooks {
         order_events_ref.insert(current_order_id, current_order_events);
 
         order_events
+    }
+}
+
+impl Default for Orderbooks {
+    fn default() -> Orderbooks {
+        Orderbooks {
+            bids: Orderbook::default(),
+            asks: Orderbook::default(),
+            orders_location: HashMap::default(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod unit_test {
+    use super::*;
+
+    #[test]
+    fn test_limit_insert_on_empty_books() {
+        let mut the_orderbooks = Orderbooks::default();
+        let new_limit_order = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Ask,
+            r#type: OrderType::Limit,
+            volume: Some(38_000),
+            price: Some(9_800_000),
+            max_quote: None,
+            events: Vec::new(),
+        };
+        let events = the_orderbooks.execute_order(&new_limit_order);
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(the_orderbooks.asks.count(), 1);
+        assert_eq!(the_orderbooks.bids.count(), 0);
+    }
+
+    #[test]
+    fn test_market_insert_on_empty_books() {
+        let mut the_orderbooks = Orderbooks::default();
+        let new_market_order = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Ask,
+            r#type: OrderType::Market,
+            volume: Some(38_000),
+            price: None,
+            max_quote: None,
+            events: Vec::new(),
+        };
+        let events = the_orderbooks.execute_order(&new_market_order);
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(the_orderbooks.count().2, 0);
+    }
+
+    #[test]
+    fn test_single_insert_then_cancel() {
+        let mut the_orderbooks = Orderbooks::default();
+        let order_id = Uuid::new_v4();
+        let new_limit_order = OrderMessage {
+            id: order_id,
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Bid,
+            r#type: OrderType::Limit,
+            volume: Some(38_000),
+            price: Some(9_800_000),
+            max_quote: None,
+            events: Vec::new(),
+        };
+        let new_cancel_order = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: Some(order_id),
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::NoSide,
+            r#type: OrderType::Cancel,
+            volume: None,
+            price: None,
+            max_quote: None,
+            events: Vec::new(),
+        };
+        the_orderbooks.execute_order(&new_limit_order);
+        let events = the_orderbooks.execute_order(&new_cancel_order);
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(the_orderbooks.count().2, 0);
+    }
+
+    #[test]
+    fn test_single_perfect_match_market_bid_to_limit_ask() {
+        let mut the_orderbooks = Orderbooks::default();
+        let new_limit_order = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Ask,
+            r#type: OrderType::Limit,
+            volume: Some(10),
+            price: Some(100),
+            max_quote: None,
+            events: Vec::new(),
+        };
+        let new_market_order = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Bid,
+            r#type: OrderType::Market,
+            volume: Some(10),
+            price: None,
+            max_quote: Some(1000),
+            events: Vec::new(),
+        };
+        let limit_events = the_orderbooks.execute_order(&new_limit_order);
+        let market_events = the_orderbooks.execute_order(&new_market_order);
+
+        assert_eq!(limit_events.len(), 1);
+        assert_eq!(market_events.len(), 2);
+        assert_eq!(the_orderbooks.count().2, 0);
+    }
+
+    #[test]
+    fn test_single_perfect_match_market_ask_to_limit_bid() {
+        let mut the_orderbooks = Orderbooks::default();
+        let new_limit_order = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Bid,
+            r#type: OrderType::Limit,
+            volume: Some(10),
+            price: Some(100),
+            max_quote: None,
+            events: Vec::new(),
+        };
+        let new_market_order = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Ask,
+            r#type: OrderType::Market,
+            volume: Some(10),
+            price: None,
+            max_quote: None,
+            events: Vec::new(),
+        };
+        let limit_insertion_events = the_orderbooks.execute_order(&new_limit_order);
+        let market_execution_events = the_orderbooks.execute_order(&new_market_order);
+
+        assert_eq!(limit_insertion_events.len(), 1);
+        assert_eq!(market_execution_events.len(), 2);
+        assert_eq!(the_orderbooks.count().2, 0);
+    }
+
+    #[test]
+    fn test_single_partial_match_market_bid_to_limit_ask() {
+        let mut the_orderbooks = Orderbooks::default();
+        let new_limit_order = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Ask,
+            r#type: OrderType::Limit,
+            volume: Some(10),
+            price: Some(100),
+            max_quote: None,
+            events: Vec::new(),
+        };
+        let new_market_order = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Bid,
+            r#type: OrderType::Market,
+            volume: Some(9),
+            price: None,
+            max_quote: Some(1000),
+            events: Vec::new(),
+        };
+        let limit_id = new_limit_order.id;
+        let market_id = new_market_order.id;
+        let limit_events = the_orderbooks.execute_order(&new_limit_order);
+        let market_events = the_orderbooks.execute_order(&new_market_order);
+        let limit_insertion_events = limit_events.get(&limit_id).unwrap();
+        let limit_execution_events = market_events.get(&limit_id).unwrap();
+        let market_execution_events = market_events.get(&market_id).unwrap();
+
+        assert_eq!(limit_events.len(), 1);
+        assert_eq!(limit_insertion_events.len(), 2);
+        assert_eq!(limit_insertion_events[0].r#type, OrderEventType::NoMatch);
+        assert_eq!(limit_insertion_events[1].r#type, OrderEventType::Open);
+        assert_eq!(market_events.len(), 2);
+        assert_eq!(limit_execution_events.len(), 1);
+        assert_eq!(limit_execution_events[0].r#type, OrderEventType::HasMatch);
+        assert_eq!(market_execution_events.len(), 2);
+        assert_eq!(market_execution_events[0].r#type, OrderEventType::HasMatch);
+        assert_eq!(market_execution_events[1].r#type, OrderEventType::Closed);
+        assert_eq!(the_orderbooks.count().0, 0);
+        assert_eq!(the_orderbooks.count().1, 1);
+        assert_eq!(the_orderbooks.count().2, 1);
+    }
+
+    #[test]
+    fn test_single_partial_match_market_ask_to_limit_bid() {
+        let mut the_orderbooks = Orderbooks::default();
+        let new_limit_order = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Bid,
+            r#type: OrderType::Limit,
+            volume: Some(10),
+            price: Some(100),
+            max_quote: None,
+            events: Vec::new(),
+        };
+        let new_market_order = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Ask,
+            r#type: OrderType::Market,
+            volume: Some(9),
+            price: None,
+            max_quote: None,
+            events: Vec::new(),
+        };
+        let limit_id = new_limit_order.id;
+        let market_id = new_market_order.id;
+        let limit_events = the_orderbooks.execute_order(&new_limit_order);
+        let market_events = the_orderbooks.execute_order(&new_market_order);
+        let limit_insertion_events = limit_events.get(&limit_id).unwrap();
+        let limit_execution_events = market_events.get(&limit_id).unwrap();
+        let market_execution_events = market_events.get(&market_id).unwrap();
+
+        assert_eq!(limit_events.len(), 1);
+        assert_eq!(limit_insertion_events.len(), 2);
+        assert_eq!(limit_insertion_events[0].r#type, OrderEventType::NoMatch);
+        assert_eq!(limit_insertion_events[1].r#type, OrderEventType::Open);
+        assert_eq!(market_events.len(), 2);
+        assert_eq!(limit_execution_events.len(), 1);
+        assert_eq!(limit_execution_events[0].r#type, OrderEventType::HasMatch);
+        assert_eq!(market_execution_events.len(), 2);
+        assert_eq!(market_execution_events[0].r#type, OrderEventType::HasMatch);
+        assert_eq!(market_execution_events[1].r#type, OrderEventType::Closed);
+        assert_eq!(the_orderbooks.count().0, 1);
+        assert_eq!(the_orderbooks.count().1, 0);
+        assert_eq!(the_orderbooks.count().2, 1);
+    }
+
+    #[test]
+    fn test_single_perfect_market_ask_to_many_limit_bids() {
+        let mut the_orderbooks = Orderbooks::default();
+        let new_limit_order_0 = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Bid,
+            r#type: OrderType::Limit,
+            volume: Some(5),
+            price: Some(100),
+            max_quote: None,
+            events: Vec::new(),
+        };
+        let new_limit_order_1 = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Bid,
+            r#type: OrderType::Limit,
+            volume: Some(5),
+            price: Some(200),
+            max_quote: None,
+            events: Vec::new(),
+        };
+        let new_market_order = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Ask,
+            r#type: OrderType::Market,
+            volume: Some(10),
+            price: None,
+            max_quote: None,
+            events: Vec::new(),
+        };
+        the_orderbooks.execute_order(&new_limit_order_0);
+        the_orderbooks.execute_order(&new_limit_order_1);
+        let market_execution_events = the_orderbooks.execute_order(&new_market_order);
+
+        assert_eq!(market_execution_events.len(), 3);
+        assert_eq!(the_orderbooks.count().2, 0);
+    }
+
+    #[test]
+    fn test_single_perfect_market_bid_to_many_limit_asks() {
+        let mut the_orderbooks = Orderbooks::default();
+        let new_limit_order_0 = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Ask,
+            r#type: OrderType::Limit,
+            volume: Some(5),
+            price: Some(100),
+            max_quote: None,
+            events: Vec::new(),
+        };
+        let new_limit_order_1 = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Ask,
+            r#type: OrderType::Limit,
+            volume: Some(5),
+            price: Some(200),
+            max_quote: None,
+            events: Vec::new(),
+        };
+        let new_market_order = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Bid,
+            r#type: OrderType::Market,
+            volume: Some(10),
+            price: None,
+            max_quote: Some(1500),
+            events: Vec::new(),
+        };
+        the_orderbooks.execute_order(&new_limit_order_0);
+        the_orderbooks.execute_order(&new_limit_order_1);
+        let market_execution_events = the_orderbooks.execute_order(&new_market_order);
+
+        assert_eq!(market_execution_events.len(), 3);
+        assert_eq!(the_orderbooks.count().2, 0);
+    }
+
+    #[test]
+    fn test_single_partial_market_ask_to_many_limit_bids() {
+        let mut the_orderbooks = Orderbooks::default();
+        let new_limit_order_0 = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Bid,
+            r#type: OrderType::Limit,
+            volume: Some(5),
+            price: Some(100),
+            max_quote: None,
+            events: Vec::new(),
+        };
+        let new_limit_order_1 = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Bid,
+            r#type: OrderType::Limit,
+            volume: Some(5),
+            price: Some(200),
+            max_quote: None,
+            events: Vec::new(),
+        };
+        let new_market_order = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Ask,
+            r#type: OrderType::Market,
+            volume: Some(20),
+            price: None,
+            max_quote: None,
+            events: Vec::new(),
+        };
+        the_orderbooks.execute_order(&new_limit_order_0);
+        the_orderbooks.execute_order(&new_limit_order_1);
+        let execution_events = the_orderbooks.execute_order(&new_market_order);
+        let market_execution_events = execution_events.get(&new_market_order.id).unwrap();
+
+        assert_eq!(execution_events.len(), 3);
+        assert_eq!(market_execution_events.len(), 3);
+        assert_eq!(market_execution_events[0].r#type, OrderEventType::HasMatch);
+        assert_eq!(market_execution_events[1].r#type, OrderEventType::HasMatch);
+        assert_eq!(market_execution_events[2].r#type, OrderEventType::Closed);
+        assert_eq!(the_orderbooks.count().2, 0);
+    }
+
+    #[test]
+    fn test_single_partial_market_bid_to_many_limit_asks() {
+        let mut the_orderbooks = Orderbooks::default();
+        let new_limit_order_0 = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Ask,
+            r#type: OrderType::Limit,
+            volume: Some(5),
+            price: Some(100),
+            max_quote: None,
+            events: Vec::new(),
+        };
+        let new_limit_order_1 = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Ask,
+            r#type: OrderType::Limit,
+            volume: Some(5),
+            price: Some(200),
+            max_quote: None,
+            events: Vec::new(),
+        };
+        let new_market_order = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Bid,
+            r#type: OrderType::Market,
+            volume: Some(20),
+            price: None,
+            max_quote: Some(100),
+            events: Vec::new(),
+        };
+        the_orderbooks.execute_order(&new_limit_order_0);
+        the_orderbooks.execute_order(&new_limit_order_1);
+        let execution_events = the_orderbooks.execute_order(&new_market_order);
+        let market_execution_events = execution_events.get(&new_market_order.id).unwrap();
+
+        assert_eq!(execution_events.len(), 2);
+        assert_eq!(market_execution_events.len(), 2);
+        assert_eq!(market_execution_events[0].r#type, OrderEventType::HasMatch);
+        assert_eq!(market_execution_events[1].r#type, OrderEventType::Closed);
+        assert_eq!(market_execution_events[1].remaining_volume.unwrap(), 19);
+        assert_eq!(the_orderbooks.count().2, 2);
+    }
+
+    #[test]
+    fn test_single_perfect_limit_bid_to_limit_ask() {
+        let mut the_orderbooks = Orderbooks::default();
+        let new_limit_order_0 = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Ask,
+            r#type: OrderType::Limit,
+            volume: Some(10),
+            price: Some(100),
+            max_quote: None,
+            events: Vec::new(),
+        };
+        let new_limit_order_1 = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Bid,
+            r#type: OrderType::Limit,
+            volume: Some(10),
+            price: Some(200),
+            max_quote: None,
+            events: Vec::new(),
+        };
+        let insertion_events = the_orderbooks.execute_order(&new_limit_order_0);
+        let execution_events = the_orderbooks.execute_order(&new_limit_order_1);
+
+        assert_eq!(insertion_events.len(), 1);
+        assert_eq!(execution_events.len(), 2);
+        assert_eq!(the_orderbooks.count().2, 0);
+    }
+
+    #[test]
+    fn test_single_perfect_limit_ask_to_limit_bid() {
+        let mut the_orderbooks = Orderbooks::default();
+        let new_limit_order_0 = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Bid,
+            r#type: OrderType::Limit,
+            volume: Some(10),
+            price: Some(200),
+            max_quote: None,
+            events: Vec::new(),
+        };
+        let new_limit_order_1 = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Ask,
+            r#type: OrderType::Limit,
+            volume: Some(10),
+            price: Some(100),
+            max_quote: None,
+            events: Vec::new(),
+        };
+        let insertion_events = the_orderbooks.execute_order(&new_limit_order_0);
+        let execution_events = the_orderbooks.execute_order(&new_limit_order_1);
+
+        assert_eq!(insertion_events.len(), 1);
+        assert_eq!(execution_events.len(), 2);
+        assert_eq!(the_orderbooks.count().2, 0);
+    }
+
+    #[test]
+    fn test_single_partial_limit_bid_to_limit_ask() {
+        let mut the_orderbooks = Orderbooks::default();
+        let new_limit_order_0 = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Ask,
+            r#type: OrderType::Limit,
+            volume: Some(12),
+            price: Some(100),
+            max_quote: None,
+            events: Vec::new(),
+        };
+        let new_limit_order_1 = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Bid,
+            r#type: OrderType::Limit,
+            volume: Some(10),
+            price: Some(200),
+            max_quote: None,
+            events: Vec::new(),
+        };
+        let insertion_events = the_orderbooks.execute_order(&new_limit_order_0);
+        let execution_events = the_orderbooks.execute_order(&new_limit_order_1);
+
+        assert_eq!(insertion_events.len(), 1);
+        assert_eq!(execution_events.len(), 2);
+        assert_eq!(the_orderbooks.count().0, 0);
+        assert_eq!(the_orderbooks.count().1, 1);
+        assert_eq!(the_orderbooks.count().2, 1);
+    }
+
+    #[test]
+    fn test_single_partial_limit_ask_to_limit_bid() {
+        let mut the_orderbooks = Orderbooks::default();
+        let new_limit_order_0 = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Bid,
+            r#type: OrderType::Limit,
+            volume: Some(12),
+            price: Some(200),
+            max_quote: None,
+            events: Vec::new(),
+        };
+        let new_limit_order_1 = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Ask,
+            r#type: OrderType::Limit,
+            volume: Some(10),
+            price: Some(100),
+            max_quote: None,
+            events: Vec::new(),
+        };
+        let insertion_events = the_orderbooks.execute_order(&new_limit_order_0);
+        let execution_events = the_orderbooks.execute_order(&new_limit_order_1);
+
+        assert_eq!(insertion_events.len(), 1);
+        assert_eq!(execution_events.len(), 2);
+        assert_eq!(the_orderbooks.count().0, 1);
+        assert_eq!(the_orderbooks.count().1, 0);
+        assert_eq!(the_orderbooks.count().2, 1);
+    }
+
+    #[test]
+    fn test_single_perfect_limit_bid_to_many_limit_ask() {
+        let mut the_orderbooks = Orderbooks::default();
+        let new_limit_order_0 = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Ask,
+            r#type: OrderType::Limit,
+            volume: Some(10),
+            price: Some(100),
+            max_quote: None,
+            events: Vec::new(),
+        };
+        let new_limit_order_1 = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Ask,
+            r#type: OrderType::Limit,
+            volume: Some(10),
+            price: Some(100),
+            max_quote: None,
+            events: Vec::new(),
+        };
+        let new_limit_order_2 = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Bid,
+            r#type: OrderType::Limit,
+            volume: Some(20),
+            price: Some(200),
+            max_quote: None,
+            events: Vec::new(),
+        };
+        the_orderbooks.execute_order(&new_limit_order_0);
+        the_orderbooks.execute_order(&new_limit_order_1);
+        let execution_events = the_orderbooks.execute_order(&new_limit_order_2);
+
+        assert_eq!(execution_events.len(), 3);
+        assert_eq!(the_orderbooks.count().2, 0);
+    }
+
+    #[test]
+    fn test_single_perfect_limit_ask_to_many_limit_bid() {
+        let mut the_orderbooks = Orderbooks::default();
+        let new_limit_order_0 = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Bid,
+            r#type: OrderType::Limit,
+            volume: Some(10),
+            price: Some(200),
+            max_quote: None,
+            events: Vec::new(),
+        };
+        let new_limit_order_1 = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Bid,
+            r#type: OrderType::Limit,
+            volume: Some(10),
+            price: Some(200),
+            max_quote: None,
+            events: Vec::new(),
+        };
+        let new_limit_order_2 = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Ask,
+            r#type: OrderType::Limit,
+            volume: Some(20),
+            price: Some(100),
+            max_quote: None,
+            events: Vec::new(),
+        };
+        the_orderbooks.execute_order(&new_limit_order_0);
+        the_orderbooks.execute_order(&new_limit_order_1);
+        let execution_events = the_orderbooks.execute_order(&new_limit_order_2);
+
+        assert_eq!(execution_events.len(), 3);
+        assert_eq!(the_orderbooks.count().2, 0);
+    }
+
+    #[test]
+    fn test_single_partial_limit_bid_to_many_limit_ask() {
+        let mut the_orderbooks = Orderbooks::default();
+        let new_limit_order_0 = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Ask,
+            r#type: OrderType::Limit,
+            volume: Some(6),
+            price: Some(100),
+            max_quote: None,
+            events: Vec::new(),
+        };
+        let new_limit_order_1 = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Ask,
+            r#type: OrderType::Limit,
+            volume: Some(6),
+            price: Some(200),
+            max_quote: None,
+            events: Vec::new(),
+        };
+        let new_limit_order_2 = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Bid,
+            r#type: OrderType::Limit,
+            volume: Some(10),
+            price: Some(200),
+            max_quote: None,
+            events: Vec::new(),
+        };
+        the_orderbooks.execute_order(&new_limit_order_0);
+        the_orderbooks.execute_order(&new_limit_order_1);
+        let execution_events = the_orderbooks.execute_order(&new_limit_order_2);
+
+        assert_eq!(execution_events.len(), 3);
+        assert_eq!(the_orderbooks.count().0, 0);
+        assert_eq!(the_orderbooks.count().1, 1);
+        assert_eq!(the_orderbooks.count().2, 1);
+    }
+
+    #[test]
+    fn test_single_partial_limit_ask_to_many_limit_bid() {
+        let mut the_orderbooks = Orderbooks::default();
+        let new_limit_order_0 = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Bid,
+            r#type: OrderType::Limit,
+            volume: Some(5),
+            price: Some(200),
+            max_quote: None,
+            events: Vec::new(),
+        };
+        let new_limit_order_1 = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Bid,
+            r#type: OrderType::Limit,
+            volume: Some(10),
+            price: Some(100),
+            max_quote: None,
+            events: Vec::new(),
+        };
+        let new_limit_order_2 = OrderMessage {
+            id: Uuid::new_v4(),
+            target_id: None,
+            created_at: Utc::now().timestamp_nanos(),
+            side: OrderSide::Ask,
+            r#type: OrderType::Limit,
+            volume: Some(10),
+            price: Some(100),
+            max_quote: None,
+            events: Vec::new(),
+        };
+        the_orderbooks.execute_order(&new_limit_order_0);
+        the_orderbooks.execute_order(&new_limit_order_1);
+        let execution_events = the_orderbooks.execute_order(&new_limit_order_2);
+
+        assert_eq!(execution_events.len(), 3);
+        assert_eq!(the_orderbooks.count().0, 1);
+        assert_eq!(the_orderbooks.count().1, 0);
+        assert_eq!(the_orderbooks.count().2, 1);
     }
 }

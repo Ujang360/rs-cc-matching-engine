@@ -10,6 +10,7 @@ pub type UTCNanoSeconds = i64;
 #[derive(Copy, Clone, Debug)]
 #[repr(u8)]
 pub enum OrderSide {
+    NoSide = 0,
     Bid = 1,
     Ask = 2,
 }
