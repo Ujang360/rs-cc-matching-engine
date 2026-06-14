@@ -1,0 +1,6 @@
+[project]
+name = "ujang-rs-cc-matching-engine"
+slug = "ujang-rs-cc-matching-engine"
+
+[amem]
+server = "https://amem.flusci.org"
